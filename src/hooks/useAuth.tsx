@@ -1,4 +1,4 @@
-import { makeRedirectUri, revokeAsync, startAsync } from 'expo-auth-session';
+import { makeRedirectUri, revokeAsync, useAuthRequest, ResponseType, RevokeTokenRequestConfig} from 'expo-auth-session';
 import React, { useEffect, createContext, useContext, useState, ReactNode } from 'react';
 import { generateRandom } from 'expo-auth-session/build/PKCE';
 
@@ -25,10 +25,6 @@ interface AuthProviderData {
 
 const AuthContext = createContext({} as AuthContextData);
 
-const twitchEndpoints = {
-  authorization: 'https://id.twitch.tv/oauth2/authorize',
-  revocation: 'https://id.twitch.tv/oauth2/revoke'
-};
 
 function AuthProvider({ children }: AuthProviderData) {
   const [isLoggingOut, setIsLoggingOut] = useState(false);
@@ -36,62 +32,95 @@ function AuthProvider({ children }: AuthProviderData) {
   const [user, setUser] = useState({} as User);
   const [userToken, setUserToken] = useState('');
 
-  // get CLIENT_ID from environment variables
+  const { CLIENT_ID } = process.env;
+
+  const REDIRECT_URI = makeRedirectUri({
+    useProxy: true
+  });
+
+  const SCOPES = ['openid', 'user:read:email', 'user:read:follows'];
+
+  const discovery = {
+    authorizationEndpoint: 'https://id.twitch.tv/oauth2/authorize',
+    tokenEndpoint: 'https://id.twitch.tv/oauth2/token',
+    revocationEndpoint: 'https://id.twitch.tv/oauth2/revoke',
+  };
+
+  const [request, response, promptAsync] = useAuthRequest(
+    {
+      responseType: ResponseType.Token,
+      clientId: CLIENT_ID as string,
+      redirectUri: REDIRECT_URI,
+      scopes: SCOPES,
+    },
+    discovery
+  );
+
+  async function getUsersInfos(){
+    const { data } = await api.get('/users');
+
+    const userData = data.data[0];
+
+    setUser({
+      id: userData.id,
+      display_name: userData.display_name,
+      email: userData.email,
+      profile_image_url: userData.profile_image_url,
+    });
+  }
+
+  useEffect(() => {
+    if (response?.type === "success" && isLoggingIn) {
+      const { access_token } = response.params;
+
+      api.defaults.headers.common['Authorization'] =  `Bearer ${access_token}`;
+      api.defaults.headers.common['Client-Id'] = CLIENT_ID
+
+      setUserToken(access_token);
+      getUsersInfos();
+      
+    }
+  }, [response, user]);
 
   async function signIn() {
     try {
-      // set isLoggingIn to true
+      
+      setIsLoggingIn(true)
 
-      // REDIRECT_URI - create OAuth redirect URI using makeRedirectUri() with "useProxy" option set to true
-      // RESPONSE_TYPE - set to "token"
-      // SCOPE - create a space-separated list of the following scopes: "openid", "user:read:email" and "user:read:follows"
-      // FORCE_VERIFY - set to true
-      // STATE - generate random 30-length string using generateRandom() with "size" set to 30
+      await promptAsync({useProxy: true});
 
-      // assemble authUrl with twitchEndpoint authorization, client_id, 
-      // redirect_uri, response_type, scope, force_verify and state
-
-      // call startAsync with authUrl
-
-      // verify if startAsync response.type equals "success" and response.params.error differs from "access_denied"
-      // if true, do the following:
-
-        // verify if startAsync response.params.state differs from STATE
-        // if true, do the following:
-          // throw an error with message "Invalid state value"
-
-        // add access_token to request's authorization header
-
-        // call Twitch API's users route
-
-        // set user state with response from Twitch API's route "/users"
-        // set userToken state with response's access_token from startAsync
     } catch (error) {
-      // throw an error
+      console.log(error);
     } finally {
-      // set isLoggingIn to false
+      setIsLoggingIn(false)
     }
+
   }
 
   async function signOut() {
     try {
-      // set isLoggingOut to true
+      setIsLoggingOut(true);
 
-      // call revokeAsync with access_token, client_id and twitchEndpoint revocation
+      const teste = await revokeAsync(
+        {token: userToken, tokenTypeHint: 'access_token'} as RevokeTokenRequestConfig, 
+        discovery
+      );
     } catch (error) {
+      console.log(error)
     } finally {
       // set user state to an empty User object
+      setUser({} as User);
       // set userToken state to an empty string
-
+      setUserToken("");
       // remove "access_token" from request's authorization header
+      delete api.defaults.headers.common['Authorization'];
+      delete api.defaults.headers.common['Client-Id'];
+      
+      setIsLoggingOut(false);
 
-      // set isLoggingOut to false
+      console.log(api.defaults.headers);
     }
   }
-
-  useEffect(() => {
-    // add client_id to request's "Client-Id" header
-  }, [])
 
   return (
     <AuthContext.Provider value={{ user, isLoggingOut, isLoggingIn, signIn, signOut }}>
